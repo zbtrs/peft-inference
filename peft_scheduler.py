@@ -29,7 +29,7 @@ class PeftConfig:
         )
 
 class PeftTask:
-    def __init__(self, peft_config, text_column, label_column, max_length, lr, batch_size, num_epochs):
+    def __init__(self, peft_config, preprocess_function, prepare_data_function, setup_optimizer_function, text_column, label_column, max_length, lr, batch_size, num_epochs):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.text_column = text_column
         self.label_column = label_column
@@ -43,7 +43,8 @@ class PeftTask:
         self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name_or_path)
         self.model = get_peft_model(self.model, self.peft_config.get_config())
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name_or_path)
-
+        self.model.to(self.device)
+        
         self.current_epoch = 0
         self.current_step = 0
 
@@ -51,66 +52,31 @@ class PeftTask:
         self.eval_dataset = None
         self.train_dataloader = None
         self.eval_dataloader = None
+        self.train_iterator = None
 
         self.optimizer = None
         self.lr_scheduler = None
 
-    def preprocess_function(self, examples):
-        inputs = examples[self.text_column]
-        targets = examples[self.label_column]
-        model_inputs = self.tokenizer(inputs, max_length=self.max_length, padding="max_length", truncation=True, return_tensors="pt")
-        labels = self.tokenizer(targets, max_length=3, padding="max_length", truncation=True, return_tensors="pt")
-        labels = labels["input_ids"]
-        labels[labels == self.tokenizer.pad_token_id] = -100
-        model_inputs["labels"] = labels
-        return model_inputs
+        # Assigning functions
+        self.preprocess_function = preprocess_function
+        self.prepare_data_function = prepare_data_function
+        self.setup_optimizer_function = setup_optimizer_function
 
     def prepare_data(self):
-        dataset = load_dataset("financial_phrasebank", "sentences_allagree")
-        dataset = dataset["train"].train_test_split(test_size=0.1)
-        dataset["validation"] = dataset["test"]
-        del dataset["test"]
-
-        classes = dataset["train"].features["label"].names
-        dataset = dataset.map(
-            lambda x: {"text_label": [classes[label] for label in x["label"]]},
-            batched=True,
-            num_proc=1,
-        )
-
-        processed_datasets = dataset.map(
-            self.preprocess_function,
-            batched=True,
-            num_proc=1,
-            remove_columns=dataset["train"].column_names,
-            load_from_cache_file=False,
-            desc="Running tokenizer on dataset",
-        )
-
-        self.train_dataset = processed_datasets["train"]
-        self.eval_dataset = processed_datasets["validation"]
-
-        self.train_dataloader = DataLoader(
-            self.train_dataset, shuffle=True, collate_fn=default_data_collator, batch_size=self.batch_size, pin_memory=True
-        )
-        self.eval_dataloader = DataLoader(self.eval_dataset, collate_fn=default_data_collator, batch_size=self.batch_size, pin_memory=True)
+        self.train_dataset, self.eval_dataset, self.train_dataloader, self.eval_dataloader, self.train_iterator = self.prepare_data_function(self)
 
     def setup_optimizer_and_scheduler(self):
-        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.lr)
-        self.lr_scheduler = get_linear_schedule_with_warmup(
-            optimizer=self.optimizer,
-            num_warmup_steps=0,
-            num_training_steps=(len(self.train_dataloader) * self.num_epochs),
-        )
+        self.optimizer, self.lr_scheduler = self.setup_optimizer_function(self)
 
     def save_state(self):
-        return {
+        state = {
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'lr_scheduler_state_dict': self.lr_scheduler.state_dict(),
             'current_epoch': self.current_epoch,
             'current_step': self.current_step
         }
+        return state
 
     def load_state(self, state):
         self.model.load_state_dict(state['model_state_dict'])
@@ -118,6 +84,7 @@ class PeftTask:
         self.lr_scheduler.load_state_dict(state['lr_scheduler_state_dict'])
         self.current_epoch = state['current_epoch']
         self.current_step = state['current_step']
+        self.train_iterator = iter(self.train_dataloader)  # Reset the iterator
 
     def train_step(self, num_steps=1):
         if num_steps <= 0:
@@ -125,9 +92,14 @@ class PeftTask:
         
         self.model.train()
         total_loss = 0
-        for step, batch in enumerate(tqdm(self.train_dataloader)):
-            if step >= num_steps:
-                break
+        for _ in range(num_steps):
+            try:
+                batch = next(self.train_iterator)
+            except StopIteration:
+                self.current_epoch += 1
+                self.train_iterator = iter(self.train_dataloader)
+                batch = next(self.train_iterator)
+                
             batch = {k: v.to(self.device) for k, v in batch.items()}
             outputs = self.model(**batch)
             loss = outputs.loss
@@ -138,22 +110,6 @@ class PeftTask:
             self.optimizer.zero_grad()
             self.current_step += 1
         return total_loss
-
-    def train_epoch(self):
-        self.model.train()
-        total_loss = 0
-        for step, batch in enumerate(tqdm(self.train_dataloader)):
-            batch = {k: v.to(self.device) for k, v in batch.items()}
-            outputs = self.model(**batch)
-            loss = outputs.loss
-            total_loss += loss.detach().float()
-            loss.backward()
-            self.optimizer.step()
-            self.lr_scheduler.step()
-            self.optimizer.zero_grad()
-            self.current_step += 1
-        self.current_epoch += 1
-        return total_loss / len(self.train_dataloader)
 
     def evaluate(self):
         self.model.eval()
@@ -196,9 +152,7 @@ class PeftManager:
         except Exception as e:
             print(f"Error during training step: {e}")
 
-# 示例使用
 
-# 定义 PEFT 配置
 peft_config = PeftConfig(
     model_name_or_path="bigscience/mt0-large",
     peft_type=TaskType.SEQ_2_SEQ_LM,
@@ -209,9 +163,63 @@ peft_config = PeftConfig(
     lora_dropout=0.1
 )
 
-# 初始化训练任务
+def preprocess_function(task, examples):
+    inputs = examples[task.text_column]
+    targets = examples[task.label_column]
+    model_inputs = task.tokenizer(inputs, max_length=task.max_length, padding="max_length", truncation=True, return_tensors="pt")
+    labels = task.tokenizer(targets, max_length=3, padding="max_length", truncation=True, return_tensors="pt")
+    labels = labels["input_ids"]
+    labels[labels == task.tokenizer.pad_token_id] = -100
+    model_inputs["labels"] = labels
+    return model_inputs
+
+def prepare_data_function(task):
+    dataset = load_dataset("financial_phrasebank", "sentences_allagree")
+    dataset = dataset["train"].train_test_split(test_size=0.1)
+    dataset["validation"] = dataset["test"]
+    del dataset["test"]
+
+    classes = dataset["train"].features["label"].names
+    dataset = dataset.map(
+        lambda x: {"text_label": [classes[label] for label in x["label"]]},
+        batched=True,
+        num_proc=1,
+    )
+
+    processed_datasets = dataset.map(
+        lambda x: preprocess_function(task, x),
+        batched=True,
+        num_proc=1,
+        remove_columns=dataset["train"].column_names,
+        load_from_cache_file=False,
+        desc="Running tokenizer on dataset",
+    )
+
+    train_dataset = processed_datasets["train"]
+    eval_dataset = processed_datasets["validation"]
+
+    train_dataloader = DataLoader(
+        train_dataset, shuffle=True, collate_fn=default_data_collator, batch_size=task.batch_size, pin_memory=True
+    )
+    eval_dataloader = DataLoader(eval_dataset, collate_fn=default_data_collator, batch_size=task.batch_size, pin_memory=True)
+    train_iterator = iter(train_dataloader)
+
+    return train_dataset, eval_dataset, train_dataloader, eval_dataloader, train_iterator
+
+def setup_optimizer_function(task):
+    optimizer = torch.optim.AdamW(task.model.parameters(), lr=task.lr)
+    lr_scheduler = get_linear_schedule_with_warmup(
+        optimizer=optimizer,
+        num_warmup_steps=0,
+        num_training_steps=(len(task.train_dataloader) * task.num_epochs),
+    )
+    return optimizer, lr_scheduler
+
 task1 = PeftTask(
     peft_config=peft_config,
+    preprocess_function=preprocess_function,
+    prepare_data_function=prepare_data_function,
+    setup_optimizer_function=setup_optimizer_function,
     text_column="sentence",
     label_column="text_label",
     max_length=128,
@@ -220,25 +228,15 @@ task1 = PeftTask(
     num_epochs=3
 )
 
-# 准备数据
 task1.prepare_data()
 
-# 设置优化器和调度器
 task1.setup_optimizer_and_scheduler()
 
-# 初始化任务管理器并添加任务
-manager = PeftManager()
-manager.add_task(task1)
+peft_manager = PeftManager()
+peft_manager.add_task(task1)
 
-# 运行下一个任务
-manager.next_task()
-
-# 进行一步训练并打印损失
-manager.run_next_step()
-
-# 保存状态以便下次恢复
-state = task1.save_state()
-
-# 恢复状态后继续训练
-task1.load_state(state)
-manager.run_next_step()
+task = peft_manager.next_task()
+for epoch in range(task.num_epochs):
+    print(f"Epoch {epoch + 1}")
+    for step in range(len(task.train_dataloader)):
+        peft_manager.run_next_step()
