@@ -20,7 +20,7 @@ text_column = "sentence"
 label_column = "text_label"
 max_length = 128
 lr = 1e-3
-num_epochs = 3
+num_epochs = 1
 batch_size = 8
 
 # creating model
