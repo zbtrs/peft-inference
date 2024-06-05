@@ -88,7 +88,6 @@ class PeftTask:
             self.current_step = state['current_step']
             self.iterator_position = state['iterator_position']
             self.train_iterator = iter(self.train_dataloader)
-            # 跳到指定批次
             if state['current_batch'] is not None:
                 self.train_iterator = itertools.chain([state['current_batch']], self.train_iterator)
 
@@ -146,6 +145,11 @@ class PeftTask:
         print(f"{accuracy=} % on the evaluation dataset")
         print(f"{self.dataset['validation']['text_label'][:10]=}")
 
+    def unload_from_gpu(self):
+        self.model.cpu()
+        torch.cuda.empty_cache()
+        print("Model and data unloaded from GPU.")
+
 class PeftManager:
     def __init__(self):
         self.task_queue = []
@@ -164,6 +168,7 @@ class PeftManager:
             
             if task.current_step >= task.num_epochs * len(task.train_dataloader):
                 task.evaluate()
+                task.unload_from_gpu()
                 print(f"Task with current_step {task.current_step} exceeds total steps, skipping.")
                 continue
 
@@ -179,9 +184,10 @@ class PeftManager:
                     "state": state
                 }
 
-                # Add the task with its state back to the front of the queue
                 self.task_queue.insert(0, task_state)
+                # task.unload_from_gpu()
                 print(f"Task state saved and added back to the queue. Queue length: {len(self.task_queue)}")
                 return loss
             except Exception as e:
                 print(f"Error during training step: {e}")
+                task.unload_from_gpu()
