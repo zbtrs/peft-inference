@@ -8,6 +8,14 @@ from datasets import load_dataset
 from tqdm import tqdm
 import os
 
+class Config:
+    def __init__(self,text_column,label_column,model_name_or_path,max_length,batch_size):
+        self.text_column = text_column
+        self.label_column = label_column
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+        self.max_length = max_length
+        self.batch_size = batch_size
+
 peft_config = PeftConfig(
     model_name_or_path="bigscience/mt0-large",
     peft_type=TaskType.SEQ_2_SEQ_LM,
@@ -18,17 +26,17 @@ peft_config = PeftConfig(
     lora_dropout=0.1
 )
 
-def preprocess_function(task, examples):
-    inputs = examples[task.text_column]
-    targets = examples[task.label_column]
-    model_inputs = task.tokenizer(inputs, max_length=task.max_length, padding="max_length", truncation=True, return_tensors="pt")
-    labels = task.tokenizer(targets, max_length=3, padding="max_length", truncation=True, return_tensors="pt")
+def preprocess_function(config: Config, examples):
+    inputs = examples[config.text_column]
+    targets = examples[config.label_column]
+    model_inputs = config.tokenizer(inputs, max_length=config.max_length, padding="max_length", truncation=True, return_tensors="pt")
+    labels = config.tokenizer(targets, max_length=3, padding="max_length", truncation=True, return_tensors="pt")
     labels = labels["input_ids"]
-    labels[labels == task.tokenizer.pad_token_id] = -100
+    labels[labels == config.tokenizer.pad_token_id] = -100
     model_inputs["labels"] = labels
     return model_inputs
 
-def prepare_data_function(task):
+def prepare_data_function(config: Config):
     dataset = load_dataset("financial_phrasebank", "sentences_allagree")
     dataset = dataset["train"].train_test_split(test_size=0.1)
     dataset["validation"] = dataset["test"]
@@ -42,7 +50,7 @@ def prepare_data_function(task):
     )
 
     processed_datasets = dataset.map(
-        lambda x: preprocess_function(task, x),
+        lambda x: preprocess_function(config,x),
         batched=True,
         num_proc=1,
         remove_columns=dataset["train"].column_names,
@@ -53,13 +61,7 @@ def prepare_data_function(task):
     train_dataset = processed_datasets["train"]
     eval_dataset = processed_datasets["validation"]
 
-    train_dataloader = DataLoader(
-        train_dataset, shuffle=True, collate_fn=default_data_collator, batch_size=task.batch_size, pin_memory=True
-    )
-    eval_dataloader = DataLoader(eval_dataset, collate_fn=default_data_collator, batch_size=task.batch_size, pin_memory=True)
-    train_iterator = iter(train_dataloader)
-
-    return train_dataset, eval_dataset, train_dataloader, eval_dataloader, train_iterator, dataset
+    return train_dataset, eval_dataset, dataset
 
 def setup_optimizer_function(task):
     optimizer = torch.optim.AdamW(task.model.parameters(), lr=task.lr)
@@ -72,21 +74,26 @@ def setup_optimizer_function(task):
 
 peft_manager = PeftManager()
 
+
+config = Config("sentence","text_label","bigscience/mt0-large",128,8)
+
+train_dataset,eval_dataset,dataset = prepare_data_function(config)
+optimizer,lr_scheduler = None,None
+
 task1 = PeftTask(
     peft_config=peft_config,
-    preprocess_function=preprocess_function,
-    prepare_data_function=prepare_data_function,
-    setup_optimizer_function=setup_optimizer_function,
     text_column="sentence",
     label_column="text_label",
     max_length=128,
     lr=1e-3,
     batch_size=8,
-    num_epochs=1
+    num_epochs=1,
+    train_dataset=train_dataset,
+    eval_dataset=eval_dataset,
+    dataset=dataset,
+    optimizer=optimizer,
+    lr_scheduler=lr_scheduler
 )
-
-task1.prepare_data()
-task1.setup_optimizer_and_scheduler()
 
 task_state = {
     "task": task1,
