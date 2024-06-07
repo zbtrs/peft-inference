@@ -90,10 +90,10 @@ task1 = PeftTask(
     num_epochs=1,
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
-    dataset=dataset,
-    optimizer=optimizer,
-    lr_scheduler=lr_scheduler
+    dataset=dataset
 )
+
+task1.post_init()
 
 task_state = {
     "task": task1,
