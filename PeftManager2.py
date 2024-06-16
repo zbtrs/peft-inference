@@ -186,14 +186,16 @@ class PeftTask:
         self.model.zero_grad()
         for epoch in range(self.args.num_train_epochs):
             epoch_iterator = self.data_loader
-            for step,inputs in enumerate(epoch_iterator):
-                main_input_name = getattr(self.model, "main_input_name", "input_ids")
-                if main_input_name not in inputs:
-                    pass
-                else:
-                    input_device = inputs[main_input_name].device
-                
+            for step,inputs in enumerate(epoch_iterator):            
                 self.model.train()
                 inputs = self._prepare_inputs(inputs)
                 loss = self.compute_loss(inputs=inputs)
+                del inputs
+                loss.backward()
+                tr_loss += loss.detach()
+                self.optimizer.step()
+                self.lr_scheduler.step()
+                self.optimizer.zero_grad()
+                print(f"{step}, {tr_loss}, {loss}")
+                
                 
