@@ -78,6 +78,7 @@ peft_manager = PeftManager()
 config = Config("sentence","text_label","bigscience/mt0-large",128,8)
 
 train_dataset,eval_dataset,dataset = prepare_data_function(config)
+print(train_dataset)
 optimizer,lr_scheduler = None,None
 
 task1 = PeftTask(

@@ -6,6 +6,7 @@ from transformers import default_data_collator
 from datasets import load_dataset
 from tqdm import tqdm
 import itertools
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig,AutoTokenizer
 
 class PeftConfig:
     def __init__(self, model_name_or_path, peft_type, task_type, inference_mode, r, lora_alpha, lora_dropout):
@@ -38,7 +39,7 @@ class PeftTask:
         self.model_name_or_path = peft_config.model_name_or_path
         self.peft_config = peft_config
 
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name_or_path)
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_name_or_path)
         self.model = get_peft_model(self.model, self.peft_config.get_config())
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name_or_path)
         self.model.to(self.device)
@@ -66,9 +67,10 @@ class PeftTask:
         self.train_dataloader = DataLoader(
             self.train_dataset,shuffle=True, collate_fn=default_data_collator, batch_size=self.batch_size, pin_memory=True
         )
-        self.eval_dataloader = DataLoader(
-            self.eval_dataset, collate_fn=default_data_collator, batch_size=self.batch_size, pin_memory=True
-        )
+        if self.eval_dataset is not None:
+            self.eval_dataloader = DataLoader(
+                self.eval_dataset, collate_fn=default_data_collator, batch_size=self.batch_size, pin_memory=True
+            )
         self.train_iterator = iter(self.train_dataloader)
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.lr)
         self.lr_scheduler = get_linear_schedule_with_warmup(
@@ -118,10 +120,13 @@ class PeftTask:
                 self.iterator_position = 0
                 batch = next(self.train_iterator)
                 self.iterator_position += 1
-                
+            
             batch = {k: v.to(self.device) for k, v in batch.items()}
             outputs = self.model(**batch)
-            loss = outputs.loss
+            
+            loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
+            
+            print(loss)
             total_loss += loss.detach().float()
             loss.backward()
             self.optimizer.step()
@@ -131,6 +136,8 @@ class PeftTask:
         return total_loss
 
     def evaluate(self):
+        if self.eval_dataset is None:
+            return
         self.model.eval()
         eval_loss = 0
         eval_preds = []
@@ -169,7 +176,7 @@ class PeftManager:
         self.task_queue.append(peft_task)
         print(f"Task added. Queue length: {len(self.task_queue)}")
 
-    async def run_next_step(self):
+    def run_next_step(self):
         if self.task_queue:
             task_state = self.task_queue.pop(0)
             task = task_state["task"]
@@ -189,20 +196,20 @@ class PeftManager:
                     return
 
             task.load_state(state)
-            try:
-                loss = task.train_step(num_steps=1)
-                print(f"Step completed. Loss: {loss}")
+            # try:
+            loss = task.train_step(num_steps=1)
+            print(f"Step completed. Loss: {loss}")
 
-                state = task.save_state()
-                task_state = {
-                    "task": task,
-                    "state": state
-                }
+            state = task.save_state()
+            task_state = {
+                "task": task,
+                "state": state
+            }
 
-                self.task_queue.insert(0, task_state)
-                # task.unload_from_gpu()
-                print(f"Task state saved and added back to the queue. Queue length: {len(self.task_queue)}")
-                return loss
-            except Exception as e:
-                print(f"Error during training step: {e}")
-                task.unload_from_gpu()
+            self.task_queue.insert(0, task_state)
+            # task.unload_from_gpu()
+            print(f"Task state saved and added back to the queue. Queue length: {len(self.task_queue)}")
+            return loss
+            # except Exception as e:
+            #     print(f"Error during training step: {e}")
+            #     task.unload_from_gpu()
