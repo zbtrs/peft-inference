@@ -1,1 +1,4 @@
 bigscience/
+medquad.csv
+data.parquet
+results/
