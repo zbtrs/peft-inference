@@ -8,6 +8,8 @@ from transformers import TrainingArguments,pipeline
 from peft import LoraConfig, PeftModel, get_peft_config
 from trl import SFTTrainer
 import warnings
+from datasets import load_dataset
+# from PeftManager import PeftManager,PeftConfig,PeftTask
 from PeftManager2 import LoraConfig,PeftArgument,PeftTask
 
 warnings.filterwarnings("ignore")
@@ -74,7 +76,13 @@ model_name = "/data/aigc/llama2"
 
 tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
 tokenizer.pad_token = tokenizer.eos_token
+
 torch.cuda.empty_cache()
+model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        device_map=device_map,
+    )
+model.config.pretraining_tp = 1
 torch.cuda.empty_cache()
 
 LORA_ALPHA = 16
@@ -101,7 +109,7 @@ MAX_STEPS = 10
 
 OUTPUT_DIR = "./results"
 
-training_args = PeftArgument(
+training_args = TrainingArguments(
     output_dir= OUTPUT_DIR,
     batch_size=BATCH_SIZE,
     gradient_accumulation_steps= gradient_accumulation_steps,
@@ -111,13 +119,15 @@ training_args = PeftArgument(
     max_steps= MAX_STEPS,
 )
 
-trainer = PeftTask(
-    model_name=model_name,
+torch.cuda.empty_cache()
+trainer = SFTTrainer(
+    model=model,
     train_dataset=data,
     peft_config=peft_config,
     dataset_text_field="question",
-    max_seq=500,
-    args=training_args
+    max_seq_length=500,
+    tokenizer=tokenizer,
+    args=training_args,
 )
 
 trainer.train()
