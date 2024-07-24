@@ -52,8 +52,10 @@ class LlamaMLP(nn.Module):
         self.intermediate_size = intermediate_size
 
         torch.manual_seed(0)
-        self.up_proj = CustomLinear(self.hidden_size, self.intermediate_size, bias=False)
-        self.down_proj = CustomLinear(self.intermediate_size, self.hidden_size, bias=False)
+        # self.up_proj = CustomLinear(self.hidden_size, self.intermediate_size, bias=False)
+        # self.down_proj = CustomLinear(self.intermediate_size, self.hidden_size, bias=False)
+        self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
+        self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=False)
         self._initialize_weights()
 
     def _initialize_weights(self):

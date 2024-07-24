@@ -75,7 +75,8 @@ model_name = "/data/aigc/llama2"
 tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
 tokenizer.pad_token = tokenizer.eos_token
 torch.cuda.empty_cache()
-torch.cuda.empty_cache()
+
+torch.manual_seed(0)
 
 LORA_ALPHA = 16
 LORA_DROPOUT = 0.2
@@ -91,13 +92,13 @@ peft_config = LoraConfig(
 
 LEARNING_RATE = 1e-4
 NUM_EPOCHS = 10
-BATCH_SIZE = 1
+BATCH_SIZE = 64
 WEIGHT_DECAY = 0.001
 MAX_GRAD_NORM = 0.3
 gradient_accumulation_steps = 16
 STEPS = 1
 OPTIM = "adam"
-MAX_STEPS = 10
+MAX_STEPS = 2
 
 OUTPUT_DIR = "./results"
 

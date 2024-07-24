@@ -16,7 +16,7 @@ from peft import LoraConfig
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, get_linear_schedule_with_warmup
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 from collections.abc import Mapping
-
+from utils import print_memory_usage
 
 def is_peft_available() -> bool:
     return find_spec("peft") is not None
@@ -36,7 +36,7 @@ class PeftArgument:
 class PeftTask:
     def __init__(self,model_name,train_dataset,peft_config: LoraConfig,dataset_text_field,max_seq,args: PeftArgument):
         if isinstance(model_name, str):
-            self.model = AutoModelForCausalLM.from_pretrained(model_name) # TODO: add model_init_kwargs
+            self.model = AutoModelForCausalLM.from_pretrained(model_name,torch_dtype=torch.bfloat16) # TODO: add model_init_kwargs
             self.tokenizer = AutoTokenizer.from_pretrained(model_name)
             if getattr(self.tokenizer, "pad_token", None) is None:
                 self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -48,7 +48,7 @@ class PeftTask:
         self.device = "cuda"
         if not isinstance(self.model, PeftModel):
             self.model = get_peft_model(self.model, self.peft_config)
-        
+            self.model.print_trainable_parameters()
         self.dataset_text_field = dataset_text_field
         self.max_seq = max_seq
         self.args = args
@@ -181,6 +181,7 @@ class PeftTask:
         return (loss, outputs) if return_outputs else loss
     
     def train(self):
+        print_memory_usage("before train")
         tr_loss = torch.tensor(0.0).to(self.device)
         self._total_loss_scalar = 0.0
         self.model.zero_grad()
@@ -188,12 +189,18 @@ class PeftTask:
             epoch_iterator = self.data_loader
             for step,inputs in enumerate(epoch_iterator):            
                 self.model.train()
+
                 inputs = self._prepare_inputs(inputs)
                 loss = self.compute_loss(inputs=inputs)
+                print_memory_usage("after train")
+
                 del inputs
                 loss.backward()
+                print_memory_usage("after backward")
+
                 tr_loss += loss.detach()
                 self.optimizer.step()
+                print_memory_usage("after optimizer")
                 self.lr_scheduler.step()
                 self.optimizer.zero_grad()
                 print(f"{step}, {tr_loss}, {loss}")

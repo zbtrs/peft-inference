@@ -68,7 +68,7 @@ def measure_prefill_time(url, headers, batch_size, token_count, texts):
         "batch_size": batch_size,
         "sampling_params": {
             "temperature": 0,
-            "max_new_tokens": 400,
+            "max_new_tokens": 0,
         },
     }
 
@@ -94,8 +94,8 @@ def main():
 
     # _wait_and_warmup(url, headers)
 
-    batch_sizes = [64,128,256,512,1024,2048,4096]
-    token_counts = [16, 32, 64, 128, 256, 512, 1024]
+    batch_sizes = [1,2,4,8,16,32,64]
+    token_counts = [1,2,4,8,16,32,64,128,256,512,1024,2048]
 # #
     # batch_sizes = [16]
     # token_counts = [512,1024]
