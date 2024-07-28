@@ -1,3 +1,5 @@
+import gc
+
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -17,6 +19,7 @@ from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, get_linear_schedu
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 from collections.abc import Mapping
 from utils import print_memory_usage
+import queue
 
 def is_peft_available() -> bool:
     return find_spec("peft") is not None
@@ -205,4 +208,46 @@ class PeftTask:
                 self.optimizer.zero_grad()
                 print(f"{step}, {tr_loss}, {loss}")
                 
-                
+class PeftManager:
+    def __init__(self):
+        self.task_queue = queue.Queue()
+
+    def add_task(self, task: PeftTask):
+        self.task_queue.put(task)
+
+    def train_step(self):
+        if self.task_queue.empty():
+            print("No tasks in the queue.")
+            return
+
+        task = self.task_queue.get()
+        task.model.train()
+
+        try:
+            epoch_iterator = iter(task.data_loader)
+            inputs = next(epoch_iterator)
+            inputs = task._prepare_inputs(inputs)
+            loss = task.compute_loss(inputs=inputs)
+            loss.backward()
+            # print(f"{loss}")
+            task.optimizer.step()
+            task.lr_scheduler.step()
+            task.optimizer.zero_grad()
+            self.task_queue.put(task)
+        except StopIteration:
+            print("Finished one epoch for a task.")
+            self.release_resources(task)
+        # except Exception as e:
+        #     print(f"Error during training step: {e}")
+
+    def release_resources(self, task: PeftTask):
+        del task.model
+        del task.optimizer
+        del task.lr_scheduler
+        del task.data_loader
+
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    def has_tasks(self):
+        return not self.task_queue.empty()

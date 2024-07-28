@@ -8,7 +8,7 @@ from transformers import TrainingArguments,pipeline
 from peft import LoraConfig, PeftModel, get_peft_config
 from trl import SFTTrainer
 import warnings
-from PeftManager2 import LoraConfig,PeftArgument,PeftTask
+from PeftManager2 import LoraConfig,PeftArgument,PeftTask,PeftManager
 
 warnings.filterwarnings("ignore")
 
@@ -69,7 +69,7 @@ device_map = "auto"
 df = pd.read_csv("./medquad.csv")
 
 data = Dataset.from_pandas(pd.DataFrame(data=df))
-model_name = "/data/aigc/llama2"
+model_name = "/data02/llama2"
 
 
 tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
@@ -121,4 +121,9 @@ trainer = PeftTask(
     args=training_args
 )
 
-trainer.train()
+peft_manager = PeftManager()
+peft_manager.add_task(trainer)
+while peft_manager.has_tasks():
+    peft_manager.train_step()
+
+# trainer.train()
