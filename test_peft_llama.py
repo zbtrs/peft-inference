@@ -1,12 +1,7 @@
-import os
 import torch
-import gc
 import pandas as pd
 from datasets import Dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig,AutoTokenizer
-from transformers import TrainingArguments,pipeline
-from peft import LoraConfig, PeftModel, get_peft_config
-from trl import SFTTrainer
+from transformers import AutoTokenizer
 import warnings
 from PeftManager2 import LoraConfig,PeftArgument,PeftTask,PeftManager
 
@@ -71,12 +66,9 @@ df = pd.read_csv("./medquad.csv")
 data = Dataset.from_pandas(pd.DataFrame(data=df))
 model_name = "/data02/llama2"
 
-
 tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
 tokenizer.pad_token = tokenizer.eos_token
 torch.cuda.empty_cache()
-
-torch.manual_seed(0)
 
 LORA_ALPHA = 16
 LORA_DROPOUT = 0.2
