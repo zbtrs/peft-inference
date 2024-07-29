@@ -1,5 +1,6 @@
 import gc
 
+from ray.train.torch import backward
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -20,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Un
 from collections.abc import Mapping
 from utils import print_memory_usage
 import queue
+import time
 
 def is_peft_available() -> bool:
     return find_spec("peft") is not None
@@ -147,7 +149,7 @@ class PeftTask:
         }
 
         if not isinstance(train_dataset, IterableDataset):
-            dataloader_params["sampler"] = RandomSampler(self.train_dataset)
+            dataloader_params["sampler"] = SequentialSampler(self.train_dataset)
             dataloader_params["drop_last"] = False
 
         return DataLoader(train_dataset, **dataloader_params)
@@ -228,7 +230,19 @@ class PeftManager:
             inputs = next(epoch_iterator)
             inputs = task._prepare_inputs(inputs)
             loss = task.compute_loss(inputs=inputs)
+            print(f"loss:{loss}")
+            print(f"{inputs['input_ids'].size()}")
+            backward_start_time = time.time()
             loss.backward()
+            # print(f"backward time1: {time.time() - backward_start_time}")
+            # for i in range(len(task.model.base_model.model.base_model.forward_states) - 1, -1, -1):
+            #     grad_outputs = task.model.base_model.model.base_model.forward_states[i].grad
+            #     task.model.base_model.model.base_model.end_states[i].backward(grad_outputs)
+
+            # print(f"{task.model.base_model}")
+
+            backward_end_time = time.time()
+            print(f"backward time: {backward_end_time - backward_start_time}")
             # print(f"{loss}")
             task.optimizer.step()
             task.lr_scheduler.step()

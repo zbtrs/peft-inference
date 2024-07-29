@@ -14,6 +14,8 @@ warnings.filterwarnings("ignore")
 #     bnb_4bit_compute_dtype=torch.bfloat16
 # )
 
+torch.manual_seed(0)
+
 def prepare_non_packed_dataloader(
     tokenizer,
     dataset,
@@ -64,7 +66,7 @@ device_map = "auto"
 df = pd.read_csv("./medquad.csv")
 
 data = Dataset.from_pandas(pd.DataFrame(data=df))
-model_name = "/data02/llama2"
+model_name = "/data02/hyf/llama2"
 
 tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
 tokenizer.pad_token = tokenizer.eos_token
