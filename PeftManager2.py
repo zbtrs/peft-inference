@@ -175,6 +175,7 @@ class PeftTask:
         return inputs
     
     def compute_loss(self,inputs,return_outputs=False):
+        inputs['is_pipeline'] = False
         outputs = self.model(**inputs)
         if isinstance(outputs, dict) and "loss" not in outputs:
             raise ValueError(
@@ -195,8 +196,10 @@ class PeftTask:
                 inputs['hidden_states'] = hidden_states
                 hidden_states = self.model(**inputs)
             else:
-                loss = hidden_states["loss"] if isinstance(hidden_states, dict) else hidden_states[0]
-                return (loss, hidden_states) if return_outputs else loss
+                inputs['hidden_states'] = hidden_states
+                outputs = self.model(**inputs)
+                loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
+                return (loss, outputs) if return_outputs else loss
     
     def train(self):
         print_memory_usage("before train")
@@ -242,15 +245,15 @@ class PeftManager:
             epoch_iterator = iter(task.data_loader)
             inputs = next(epoch_iterator)
             inputs = task._prepare_inputs(inputs)
-            loss = task.compute_loss(inputs=inputs)
+            loss = task.pipeline_compute_loss(inputs=inputs)
             print(f"loss:{loss}")
             print(f"{inputs['input_ids'].size()}")
             backward_start_time = time.time()
             loss.backward()
             # print(f"backward time1: {time.time() - backward_start_time}")
-            # for i in range(len(task.model.base_model.model.base_model.forward_states) - 1, -1, -1):
-            #     grad_outputs = task.model.base_model.model.base_model.forward_states[i].grad
-            #     task.model.base_model.model.base_model.end_states[i].backward(grad_outputs)
+            for i in range(len(task.model.base_model.model.base_model.forward_states) - 1, -1, -1):
+                grad_outputs = task.model.base_model.model.base_model.forward_states[i].grad
+                task.model.base_model.model.base_model.end_states[i].backward(grad_outputs)
 
             # print(f"{task.model.base_model}")
 
