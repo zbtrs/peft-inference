@@ -184,6 +184,19 @@ class PeftTask:
         # We don't use .loss here since the model may return tuples instead of ModelOutput.
         loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
         return (loss, outputs) if return_outputs else loss
+
+    def pipeline_compute_loss(self,inputs,return_outputs=False):
+        for i in range(32):
+            inputs['is_pipeline'] = True
+            inputs['layer_number'] = i
+            if i == 0:
+                hidden_states = self.model(**inputs)
+            elif i < 31:
+                inputs['hidden_states'] = hidden_states
+                hidden_states = self.model(**inputs)
+            else:
+                loss = hidden_states["loss"] if isinstance(hidden_states, dict) else hidden_states[0]
+                return (loss, hidden_states) if return_outputs else loss
     
     def train(self):
         print_memory_usage("before train")
