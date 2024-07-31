@@ -74,6 +74,8 @@ class PeftTask:
             num_warmup_steps=0,
             num_training_steps=(len(self.data_loader) * self.args.num_train_epochs),
         )
+        self.epoch_iterator = iter(self.data_loader)
+
         
     def __prepare_non_packed_dataloader(
         self,
@@ -242,12 +244,11 @@ class PeftManager:
         task.model.train()
 
         try:
-            epoch_iterator = iter(task.data_loader)
-            inputs = next(epoch_iterator)
+            inputs = next(task.epoch_iterator)
             inputs = task._prepare_inputs(inputs)
             loss = task.pipeline_compute_loss(inputs=inputs)
             print(f"loss:{loss}")
-            print(f"{inputs['input_ids'].size()}")
+            # print(f"{inputs['input_ids'].size()}")
             backward_start_time = time.time()
             loss.backward()
             # print(f"backward time1: {time.time() - backward_start_time}")
