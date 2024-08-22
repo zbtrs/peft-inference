@@ -1,5 +1,6 @@
 import gc
 
+from ray.train.torch import backward
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -20,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Un
 from collections.abc import Mapping
 from utils import print_memory_usage
 import queue
+import time
 
 def is_peft_available() -> bool:
     return find_spec("peft") is not None
@@ -72,6 +74,8 @@ class PeftTask:
             num_warmup_steps=0,
             num_training_steps=(len(self.data_loader) * self.args.num_train_epochs),
         )
+        self.epoch_iterator = iter(self.data_loader)
+
         
     def __prepare_non_packed_dataloader(
         self,
@@ -147,7 +151,7 @@ class PeftTask:
         }
 
         if not isinstance(train_dataset, IterableDataset):
-            dataloader_params["sampler"] = RandomSampler(self.train_dataset)
+            dataloader_params["sampler"] = SequentialSampler(self.train_dataset)
             dataloader_params["drop_last"] = False
 
         return DataLoader(train_dataset, **dataloader_params)
@@ -173,6 +177,7 @@ class PeftTask:
         return inputs
     
     def compute_loss(self,inputs,return_outputs=False):
+        inputs['is_pipeline'] = False
         outputs = self.model(**inputs)
         if isinstance(outputs, dict) and "loss" not in outputs:
             raise ValueError(
@@ -182,6 +187,21 @@ class PeftTask:
         # We don't use .loss here since the model may return tuples instead of ModelOutput.
         loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
         return (loss, outputs) if return_outputs else loss
+
+    def pipeline_compute_loss(self,inputs,return_outputs=False):
+        for i in range(32):
+            inputs['is_pipeline'] = True
+            inputs['layer_number'] = i
+            if i == 0:
+                hidden_states = self.model(**inputs)
+            elif i < 31:
+                inputs['hidden_states'] = hidden_states
+                hidden_states = self.model(**inputs)
+            else:
+                inputs['hidden_states'] = hidden_states
+                outputs = self.model(**inputs)
+                loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
+                return (loss, outputs) if return_outputs else loss
     
     def train(self):
         print_memory_usage("before train")
@@ -224,11 +244,22 @@ class PeftManager:
         task.model.train()
 
         try:
-            epoch_iterator = iter(task.data_loader)
-            inputs = next(epoch_iterator)
+            inputs = next(task.epoch_iterator)
             inputs = task._prepare_inputs(inputs)
-            loss = task.compute_loss(inputs=inputs)
+            loss = task.pipeline_compute_loss(inputs=inputs)
+            print(f"loss:{loss}")
+            # print(f"{inputs['input_ids'].size()}")
+            backward_start_time = time.time()
             loss.backward()
+            # print(f"backward time1: {time.time() - backward_start_time}")
+            for i in range(len(task.model.base_model.model.base_model.forward_states) - 1, -1, -1):
+                grad_outputs = task.model.base_model.model.base_model.forward_states[i].grad
+                task.model.base_model.model.base_model.end_states[i].backward(grad_outputs)
+
+            # print(f"{task.model.base_model}")
+
+            backward_end_time = time.time()
+            print(f"backward time: {backward_end_time - backward_start_time}")
             # print(f"{loss}")
             task.optimizer.step()
             task.lr_scheduler.step()
